@@ -1,0 +1,17 @@
+{
+  "name": "jellyfish-pet",
+  "version": "1.0.0",
+  "description": "小水母桌面宠物 - Claude 的桌面化身",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable",
+    "build:installer": "electron-builder --win"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

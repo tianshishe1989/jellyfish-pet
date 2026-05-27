@@ -1,0 +1,31 @@
+appId: com.jellyfish.pet
+productName: Jellyfish
+directories:
+  output: dist
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  sign: null
+  signAndEditExecutable: false
+  icon: assets/icon.png
+  artifactName: Jellyfish.exe
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.utilities
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+files:
+  - main.js
+  - preload.js
+  - ai.js
+  - renderer/**/*
+  - node_modules/**/*
+  - assets/**/*
+asar: true

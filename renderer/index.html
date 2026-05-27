@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-app-region: no-drag;
+  }
+</style>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="edge-strip"></div>
+<div class="stage" id="jellyfish">
+  <div class="jelly-outer" id="jelly">
+    <div class="jelly-scale">
+      <div class="glow"></div>
+      <div class="head" id="head">
+        <div class="eyes">
+          <div class="eye" id="left-eye"></div>
+          <div class="eye" id="right-eye"></div>
+        </div>
+      </div>
+      <div class="arm left"></div>
+      <div class="arm right"></div>
+      <div class="legs">
+        <div class="leg"></div>
+        <div class="leg"></div>
+        <div class="leg"></div>
+        <div class="leg"></div>
+      </div>
+    </div>
+  </div>
+  <div class="state-emoji" id="state-emoji"></div>
+  <div class="speech-bubble" id="bubble"></div>
+</div>
+<div class="expand-panel" id="expand-panel">
+  <div class="panel-header">
+    <span class="panel-task" id="panel-task"></span>
+    <span class="panel-copy" id="panel-copy" title="复制回复">📋</span>
+    <span class="panel-pin" id="panel-pin" title="固定面板">📌</span>
+  </div>
+  <div class="panel-scroll">
+    <div class="panel-progress-text" id="panel-pct"></div>
+    <div class="panel-bar-track"><div class="panel-bar-fill" id="panel-bar"></div></div>
+    <div class="panel-speed" id="panel-speed"></div>
+    <div class="panel-ai" id="panel-ai"></div>
+  </div>
+</div>
+<script src="audio.js"></script>
+<script src="jellyfish.js"></script>
+</body>
+</html>
