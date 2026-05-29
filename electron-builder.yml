@@ -24,6 +24,8 @@ linux:
 files:
   - main.js
   - preload.js
+  - preload-quick-ask.js
+  - preload-chat.js
   - ai.js
   - renderer/**/*
   - node_modules/**/*
