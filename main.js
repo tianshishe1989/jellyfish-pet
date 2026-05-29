@@ -2,12 +2,14 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage } = require
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const { queryAI } = require('./ai');
+const { queryAI, PROVIDERS } = require('./ai');
 
 let win = null;
 let tray = null;
 let server = null;
 let settings = null;
+let quickAskWin = null;
+let chatWin = null;
 
 // Edge state
 let isHidden = false;
@@ -26,7 +28,9 @@ function loadSettings() {
     autostart: false, skin: 'default-blue',
     edgeAutoHide: true, serverPort: 19527, language: 'zh', edgeColor: 'blue',
     aiBackend: 'claude-api', aiApiKey: '', aiModel: 'claude-sonnet-4-6',
-    aiEndpoint: 'https://api.anthropic.com', aiSystemPrompt: '你是一个桌面助手，帮用户分析文件内容。回答简洁结构化，用中文回复。'
+    aiEndpoint: 'https://api.anthropic.com', aiSystemPrompt: '你是一个桌面助手，帮用户分析文件内容。回答简洁结构化，用中文回复。',
+    aiProvider: 'claude-anthropic', aiProviderSettings: {}, aiUseChat: false,
+    chatWinBounds: null, quickAskWinBounds: null
   };
   try {
     const p = path.join(app.getPath('userData'), 'settings.json');
@@ -44,8 +48,74 @@ function saveSettings() {
   fs.writeFileSync(p, JSON.stringify(settings, null, 2));
 }
 
+// --- Chat History Management ---
+function chatHistoryPath() {
+  return path.join(app.getPath('userData'), 'chat-history.json');
+}
+
+let _chatCache = null;
+
+function loadChatHistory() {
+  if (_chatCache) return JSON.parse(JSON.stringify(_chatCache)); // deep copy
+  try {
+    const p = chatHistoryPath();
+    if (!fs.existsSync(p)) {
+      _chatCache = { conversations: [], activeConversationId: null };
+      return JSON.parse(JSON.stringify(_chatCache));
+    }
+    const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    _chatCache = {
+      conversations: Array.isArray(data.conversations) ? data.conversations : [],
+      activeConversationId: data.activeConversationId || null
+    };
+    return JSON.parse(JSON.stringify(_chatCache));
+  } catch (e) {
+    console.error('[jellyfish] Failed to load chat history:', e.message);
+    _chatCache = { conversations: [], activeConversationId: null };
+    return JSON.parse(JSON.stringify(_chatCache));
+  }
+}
+
+let _chatSaveTimer = null;
+function saveChatHistory(history, immediate) {
+  // Always update cache immediately
+  _chatCache = JSON.parse(JSON.stringify({
+    conversations: (history.conversations || []).slice(0, 50),
+    activeConversationId: history.activeConversationId
+  }));
+  // Enforce 100 messages per conversation limit
+  _chatCache.conversations.forEach(c => {
+    if (c.messages && c.messages.length > 100) {
+      c.messages = c.messages.slice(-100);
+    }
+  });
+
+  if (immediate) {
+    if (_chatSaveTimer) { clearTimeout(_chatSaveTimer); _chatSaveTimer = null; }
+    _writeChatHistory();
+    return;
+  }
+  if (_chatSaveTimer) clearTimeout(_chatSaveTimer);
+  _chatSaveTimer = setTimeout(_writeChatHistory, 500);
+}
+
+function _writeChatHistory() {
+  try {
+    const dir = app.getPath('userData');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(chatHistoryPath(), JSON.stringify(_chatCache, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[jellyfish] Failed to write chat history:', e.message);
+  }
+}
+// Expose flush for on-quit
+saveChatHistory.flush = function() {
+  if (_chatSaveTimer) { clearTimeout(_chatSaveTimer); _chatSaveTimer = null; }
+  _writeChatHistory();
+};
+
 function getWindowSize() {
-  const sizes = { small: [48, 48], medium: [64, 64], large: [81, 81] };
+  const sizes = { small: [48, 64], medium: [64, 84], large: [81, 110] };
   return sizes[settings.size] || sizes.medium;
 }
 
@@ -93,6 +163,72 @@ function createWindow() {
   win.webContents.on('will-redirect', (event, url) => {
     if (url.startsWith('file://')) event.preventDefault();
   });
+}
+
+// --- Quick Ask Window ---
+function createQuickAskWindow() {
+  if (quickAskWin && !quickAskWin.isDestroyed()) {
+    quickAskWin.show();
+    quickAskWin.focus();
+    return;
+  }
+  const bounds = settings.quickAskWinBounds || { width: 600, height: 420 };
+  quickAskWin = new BrowserWindow({
+    width: bounds.width, height: bounds.height,
+    x: bounds.x, y: bounds.y,
+    frame: true,
+    resizable: true,
+    skipTaskbar: false,
+    title: 'Quick Ask - Jellyfish',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-quick-ask.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  if (bounds.x !== undefined) quickAskWin.setBounds(bounds);
+  quickAskWin.loadFile(path.join(__dirname, 'renderer', 'quick-ask.html'));
+  quickAskWin.on('close', () => {
+    if (quickAskWin && !quickAskWin.isDestroyed()) {
+      settings.quickAskWinBounds = quickAskWin.getBounds();
+      saveSettings();
+    }
+    quickAskWin = null;
+  });
+  quickAskWin.on('closed', () => { quickAskWin = null; });
+}
+
+// --- Chat Window ---
+function createChatWindow() {
+  if (chatWin && !chatWin.isDestroyed()) {
+    chatWin.show();
+    return;
+  }
+  const bounds = settings.chatWinBounds || { width: 800, height: 600 };
+  chatWin = new BrowserWindow({
+    width: bounds.width, height: bounds.height,
+    x: bounds.x, y: bounds.y,
+    frame: true,
+    resizable: true,
+    minWidth: 500, minHeight: 400,
+    title: 'Chat - Jellyfish',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-chat.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  if (bounds.x !== undefined) chatWin.setBounds(bounds);
+  chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'));
+  chatWin.on('close', () => {
+    if (chatWin && !chatWin.isDestroyed()) {
+      settings.chatWinBounds = chatWin.getBounds();
+      saveSettings();
+      saveChatHistory.flush && saveChatHistory.flush();
+    }
+    chatWin = null;
+  });
+  chatWin.on('closed', () => { chatWin = null; });
 }
 
 // --- HTTP Server ---
@@ -301,9 +437,7 @@ function updateTrayMenu() {
     lock: lang === 'zh' ? '锁定位置' : 'Lock Position',
     aiSettings: lang === 'zh' ? 'AI 设置' : 'AI Settings',
     aiBackend: lang === 'zh' ? 'AI 后端' : 'AI Backend',
-    aiKey: lang === 'zh' ? 'API 密钥' : 'API Key',
     aiModel: lang === 'zh' ? '模型' : 'Model',
-    aiEndpointLabel: lang === 'zh' ? '端点' : 'Endpoint',
     edgeColor: lang === 'zh' ? '光条颜色' : 'Strip Color',
     blue: lang === 'zh' ? '蓝色' : 'Blue',
     red: lang === 'zh' ? '红色' : 'Red',
@@ -349,24 +483,30 @@ function updateTrayMenu() {
         {
           label: t.aiSettings,
           submenu: [
-            { label: t.aiBackend,
-              submenu: [
-                { label: 'Claude API', type: 'radio', checked: !settings.aiBackend || settings.aiBackend === 'claude-api', click: () => {
-                  settings.aiBackend = 'claude-api'; saveSettings(); updateTrayMenu();
-                }},
-                { label: 'Claude Code CLI', type: 'radio', checked: settings.aiBackend === 'claude-code', click: () => {
-                  settings.aiBackend = 'claude-code'; saveSettings(); updateTrayMenu();
-                }},
-                { label: 'OpenAI / 兼容', type: 'radio', checked: settings.aiBackend === 'openai', click: () => {
-                  settings.aiBackend = 'openai'; saveSettings(); updateTrayMenu();
-                }}
-              ]
+            {
+              label: t.aiBackend,
+              submenu: Object.keys(PROVIDERS).map(pid => ({
+                label: PROVIDERS[pid].name,
+                type: 'radio',
+                checked: settings.aiProvider === pid || (!settings.aiProvider && pid === 'claude-anthropic'),
+                click: () => { settings.aiProvider = pid; saveSettings(); updateTrayMenu(); }
+              }))
             },
-            { label: t.aiModel, submenu: [
-              { label: 'Claude Opus 4.7', type: 'radio', checked: settings.aiModel === 'claude-opus-4-7', click: () => { settings.aiModel = 'claude-opus-4-7'; saveSettings(); updateTrayMenu(); } },
-              { label: 'Claude Sonnet 4.6', type: 'radio', checked: !settings.aiModel || settings.aiModel === 'claude-sonnet-4-6', click: () => { settings.aiModel = 'claude-sonnet-4-6'; saveSettings(); updateTrayMenu(); } },
-              { label: 'Claude Haiku 4.5', type: 'radio', checked: settings.aiModel === 'claude-haiku-4-5', click: () => { settings.aiModel = 'claude-haiku-4-5'; saveSettings(); updateTrayMenu(); } }
-            ]},
+            {
+              label: t.aiModel,
+              submenu: (() => {
+                const pid = settings.aiProvider || 'claude-anthropic';
+                const models = (PROVIDERS[pid] && PROVIDERS[pid].models) || [];
+                if (models.length === 0) {
+                  return [{ label: lang === 'zh' ? '当前供应商无模型选项' : 'No models for this provider', enabled: false }];
+                }
+                return models.map(m => ({
+                  label: m, type: 'radio',
+                  checked: settings.aiModel === m || (!settings.aiModel && m === PROVIDERS[pid].defaultModel),
+                  click: () => { settings.aiModel = m; saveSettings(); updateTrayMenu(); }
+                }));
+              })()
+            },
             { type: 'separator' },
             { label: lang === 'zh' ? '打开 AI 配置文件...' : 'Open AI Config...', click: () => {
               const { shell } = require('electron');
@@ -375,10 +515,11 @@ function updateTrayMenu() {
               const configPath = path.join(dir, 'ai-config.json');
               if (!fs.existsSync(configPath)) {
                 fs.writeFileSync(configPath, JSON.stringify({
-                  backend: settings.aiBackend || 'claude-api',
+                  aiProvider: settings.aiProvider || 'claude-anthropic',
+                  aiProviderSettings: settings.aiProviderSettings || {},
                   apiKey: settings.aiApiKey || '',
-                  model: settings.aiModel || 'claude-sonnet-4-6',
-                  endpoint: settings.aiEndpoint || 'https://api.anthropic.com',
+                  model: settings.aiModel || '',
+                  endpoint: settings.aiEndpoint || '',
                   systemPrompt: settings.aiSystemPrompt || '你是一个桌面助手，帮用户分析文件内容。回答简洁结构化，用中文回复。'
                 }, null, 2));
               }
@@ -389,8 +530,10 @@ function updateTrayMenu() {
               if (fs.existsSync(configPath)) {
                 try {
                   const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+                  if (cfg.aiProvider) settings.aiProvider = cfg.aiProvider;
+                  if (cfg.aiProviderSettings) settings.aiProviderSettings = cfg.aiProviderSettings;
+                  if (cfg.apiKey) settings.aiApiKey = cfg.apiKey;
                   if (cfg.backend) settings.aiBackend = cfg.backend;
-                  if (cfg.apiKey !== undefined) settings.aiApiKey = cfg.apiKey;
                   if (cfg.model) settings.aiModel = cfg.model;
                   if (cfg.endpoint) settings.aiEndpoint = cfg.endpoint;
                   if (cfg.systemPrompt) settings.aiSystemPrompt = cfg.systemPrompt;
@@ -432,6 +575,9 @@ function updateTrayMenu() {
         }}
       ]
     },
+    { type: 'separator' },
+    { label: lang === 'zh' ? '快速提问...' : 'Quick Ask...', click: () => createQuickAskWindow() },
+    { label: lang === 'zh' ? '打开聊天窗口' : 'Open Chat', click: () => createChatWindow() },
     { type: 'separator' },
     { label: t.quit, click: () => { app.quit(); } }
   ]);
@@ -691,6 +837,137 @@ ipcMain.on('set-settings', (_, key, value) => {
   if (win) win.webContents.send('settings-changed', { [key]: value });
 });
 
+// --- Quick Ask IPC ---
+ipcMain.on('quick-ask-close', () => {
+  if (quickAskWin && !quickAskWin.isDestroyed()) quickAskWin.close();
+});
+
+ipcMain.on('open-quick-ask', () => createQuickAskWindow());
+ipcMain.on('open-chat', () => createChatWindow());
+
+// --- Chat IPC ---
+ipcMain.on('send-file-to-chat', (_, data) => {
+  if (!chatWin || chatWin.isDestroyed()) createChatWindow();
+  setTimeout(() => {
+    if (chatWin && !chatWin.isDestroyed()) {
+      chatWin.webContents.send('file-analysis', data);
+      chatWin.show();
+    }
+  }, 500);
+});
+
+ipcMain.handle('chat-history-load', async () => {
+  try {
+    const history = loadChatHistory();
+    return { ok: true, ...history };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('chat-history-new', async (_, title) => {
+  try {
+    const history = loadChatHistory();
+    const conv = {
+      id: require('crypto').randomUUID(),
+      title: title || 'New Chat',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: []
+    };
+    history.conversations.unshift(conv);
+    history.activeConversationId = conv.id;
+    saveChatHistory(history, true);
+    return { ok: true, conversation: conv, conversations: history.conversations };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('chat-update-title', async (_, id, title) => {
+  try {
+    const history = loadChatHistory();
+    const conv = history.conversations.find(c => c.id === id);
+    if (conv) { conv.title = title; conv.updatedAt = new Date().toISOString(); }
+    saveChatHistory(history, true);
+    return conv ? { ok: true } : { ok: false, error: 'Conversation not found' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('chat-history-delete', async (_, id) => {
+  try {
+    const history = loadChatHistory();
+    history.conversations = history.conversations.filter(c => c.id !== id);
+    if (history.activeConversationId === id) {
+      history.activeConversationId = history.conversations.length > 0 ? history.conversations[0].id : null;
+    }
+    saveChatHistory(history, true);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('chat-submit', async (_, { conversationId, message, fileContext }) => {
+  try {
+    const history = loadChatHistory();
+    let conv = history.conversations.find(c => c.id === conversationId);
+    if (!conv) throw new Error('Conversation not found');
+
+    // Add user message
+    const userMsg = {
+      id: require('crypto').randomUUID(),
+      role: 'user',
+      content: message,
+      timestamp: new Date().toISOString(),
+      context: fileContext || undefined
+    };
+    conv.messages.push(userMsg);
+
+    // Build history for AI (last 20 turns)
+    const historyMessages = [];
+    const relevantMessages = conv.messages.slice(0, -1); // exclude the just-added user msg
+    const recent = relevantMessages.slice(-40); // last 20 turns (40 messages)
+    recent.forEach(m => {
+      historyMessages.push({ role: m.role, content: m.content });
+    });
+
+    // Call AI
+    let aimsg = message;
+    if (fileContext && fileContext.content) {
+      aimsg = fileContext.fileName || message;
+    }
+    const aiResponse = await queryAI(settings, aimsg,
+      fileContext && fileContext.content ? fileContext.content : null,
+      historyMessages.length > 0 ? historyMessages : null
+    );
+
+    // Add assistant message
+    const assistantMsg = {
+      id: require('crypto').randomUUID(),
+      role: 'assistant',
+      content: aiResponse,
+      timestamp: new Date().toISOString()
+    };
+    conv.messages.push(assistantMsg);
+    conv.updatedAt = new Date().toISOString();
+
+    // Auto-title
+    if (!conv.title || conv.title === 'New Chat') {
+      conv.title = message.slice(0, 40);
+    }
+
+    history.activeConversationId = conv.id;
+    saveChatHistory(history);
+
+    return { ok: true, conversation: conv };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // --- macOS specific ---
 if (process.platform === 'darwin') {
   app.dock && app.dock.hide(); // Hide dock icon — menu bar app style
@@ -705,19 +982,31 @@ app.on('open-file', (event, filePath) => {
   }
 });
 
+// --- Data path on D drive ---
+app.setPath('userData', path.join('D:', 'jellyfish-pet', 'userdata'));
+
 // --- App Lifecycle ---
 app.whenReady().then(() => {
   settings = loadSettings();
+  // Migrate legacy aiBackend to new provider system
+  let migrated = false;
+  if (!settings.aiProvider || settings.aiProvider === 'claude-anthropic') {
+    if (settings.aiBackend === 'claude-code') { settings.aiProvider = 'claude-code'; migrated = true; }
+    else if (settings.aiBackend === 'openai') { settings.aiProvider = 'openai'; migrated = true; }
+  }
+  if (migrated) saveSettings();
   // Sync AI config from file
   try {
     const cfgPath = path.join(app.getPath('userData'), 'ai-config.json');
     if (fs.existsSync(cfgPath)) {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-      if (cfg.apiKey !== undefined) settings.aiApiKey = cfg.apiKey;
+      if (cfg.apiKey) settings.aiApiKey = cfg.apiKey;
       if (cfg.backend) settings.aiBackend = cfg.backend;
       if (cfg.model) settings.aiModel = cfg.model;
       if (cfg.endpoint) settings.aiEndpoint = cfg.endpoint;
       if (cfg.systemPrompt) settings.aiSystemPrompt = cfg.systemPrompt;
+      if (cfg.aiProvider) settings.aiProvider = cfg.aiProvider;
+      if (cfg.aiProviderSettings) settings.aiProviderSettings = cfg.aiProviderSettings;
       saveSettings();
     }
   } catch (e) { /* ignore */ }

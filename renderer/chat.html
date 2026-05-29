@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="chat.css">
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <button id="btn-new">+ 新建</button>
+    </div>
+    <div class="conv-list" id="conv-list"></div>
+  </div>
+  <div class="chat-main">
+    <div class="chat-header" id="chat-header">选择或新建一个对话</div>
+    <div class="messages" id="messages">
+      <div class="empty-state">新建对话开始聊天<br>拖文件到水母也可以在这里打开</div>
+    </div>
+    <div class="input-bar">
+      <textarea id="input" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
+      <button id="btn-send">发送</button>
+    </div>
+  </div>
+</div>
+<script src="chat.js"></script>
+</body>
+</html>

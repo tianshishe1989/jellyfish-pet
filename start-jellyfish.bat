@@ -1,3 +1,3 @@
 @echo off
-cd /d "E:\jellyfish-pet"
+cd /d "D:\jellyfish-pet"
 start "" /b npm start

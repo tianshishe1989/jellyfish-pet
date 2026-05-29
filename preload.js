@@ -11,5 +11,8 @@ contextBridge.exposeInMainWorld('jellyfishAPI', {
   dragStart: () => ipcRenderer.send('drag-start'),
   dragMove: () => ipcRenderer.send('drag-move'),
   dragEnd: () => ipcRenderer.send('drag-end'),
-  aiQuery: (opts) => ipcRenderer.invoke('ai-query', opts)
+  aiQuery: (opts) => ipcRenderer.invoke('ai-query', opts),
+  sendFileToChat: (data) => ipcRenderer.send('send-file-to-chat', data),
+  openQuickAsk: () => ipcRenderer.send('open-quick-ask'),
+  openChat: () => ipcRenderer.send('open-chat')
 });

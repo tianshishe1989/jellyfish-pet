@@ -11,6 +11,7 @@ let stateTimeout = null;
 let stateSeq = 0; // sequence counter to prevent race conditions
 let lang = 'zh';
 let aiQueryId = 0; // incrementing counter to prevent overlapping AI queries
+let cachedSettings = {};
 
 const texts = {
   zh: {
@@ -184,6 +185,15 @@ window.addEventListener('drop', async (e) => {
       const content = reader.result;
       setTimeout(async () => {
         if (myQuery !== aiQueryId) return; // cancelled by newer drop
+        // Chat mode: send to chat window
+        if (cachedSettings.aiUseChat && window.jellyfishAPI.sendFileToChat) {
+          window.jellyfishAPI.sendFileToChat({ fileName: name, content: content });
+          setState('done', '已发送到聊天窗口');
+          setTimeout(() => setState('idle'), 2500);
+          return;
+        }
+
+        // Legacy: local panel analysis
         setState('thinking', '消化中...');
         panel.classList.add('show');
         try {
@@ -223,6 +233,19 @@ jelly.addEventListener('click', (e) => {
   jelly.style.animation = 'none';
   jelly.offsetHeight;
   jelly.style.animation = '';
+});
+
+// === Double-click → Quick Ask ===
+jelly.addEventListener('dblclick', (e) => {
+  if (dragging || container.classList.contains('locked')) return;
+  if (window.jellyfishAPI.openQuickAsk) window.jellyfishAPI.openQuickAsk();
+});
+
+// === Right-click → Open Chat ===
+jelly.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (container.classList.contains('locked')) return;
+  if (window.jellyfishAPI.openChat) window.jellyfishAPI.openChat();
 });
 
 // === Skin ===
@@ -362,6 +385,7 @@ if (window.jellyfishAPI) {
   });
 
   window.jellyfishAPI.onSettingsChanged((data) => {
+    Object.assign(cachedSettings, data);
     if (data.locked !== undefined) {
       container.classList.toggle('locked', data.locked);
       jelly.classList.toggle('locked', data.locked);
@@ -375,6 +399,14 @@ if (window.jellyfishAPI) {
     setState('done', data.message || `嚼嚼... ${data.name}`);
     if (data.triggerAI) {
       setTimeout(async () => {
+        // Chat mode: send to chat window
+        if (cachedSettings.aiUseChat && window.jellyfishAPI.sendFileToChat) {
+          window.jellyfishAPI.sendFileToChat({ fileName: data.name, filePath: data.path });
+          setState('done', '已发送到聊天窗口');
+          setTimeout(() => setState('idle'), 2500);
+          return;
+        }
+        // Legacy: local panel analysis
         setState('thinking', '消化中...');
         panel.classList.add('show');
         try {
@@ -414,6 +446,7 @@ if (window.jellyfishAPI) {
   });
 
   window.jellyfishAPI.getSettings().then(async (s) => {
+    cachedSettings = s;
     if (s.skin) await applySkin(s.skin);
     if (s.locked) {
       container.classList.add('locked');
