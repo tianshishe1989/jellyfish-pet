@@ -41,12 +41,31 @@ function loadSettings() {
   return defaults;
 }
 
+let _settingsDirty = false;
+let _settingsSaveTimer = null;
+
 function saveSettings() {
-  const p = path.join(app.getPath('userData'), 'settings.json');
-  const dir = path.dirname(p);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(settings, null, 2));
+  _settingsDirty = true;
+  if (_settingsSaveTimer) return; // Debounce pending, will flush
+  _settingsSaveTimer = setTimeout(() => {
+    _flushSettings();
+  }, 300);
 }
+
+function _flushSettings() {
+  if (_settingsSaveTimer) { clearTimeout(_settingsSaveTimer); _settingsSaveTimer = null; }
+  if (!_settingsDirty) return;
+  _settingsDirty = false;
+  try {
+    const p = path.join(app.getPath('userData'), 'settings.json');
+    const dir = path.dirname(p);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(settings, null, 2));
+  } catch (e) { /* ignore */ }
+}
+
+// Exposed for callers that need immediate write
+saveSettings.flush = _flushSettings;
 
 // --- Chat History Management ---
 function chatHistoryPath() {
@@ -237,13 +256,6 @@ function startServer() {
 
   server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(200); res.end(); return;
-    }
 
     if (req.method === 'POST' && req.url === '/status') {
       let body = '';
@@ -303,13 +315,18 @@ function startServer() {
     console.log(`[jellyfish] HTTP server started on http://localhost:${port}`);
   });
 
+  let portRetries = 0;
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-      server.close();
-      console.log(`Port ${port} in use, trying ${port + 1}`);
-      settings.serverPort = port + 1;
-      saveSettings();
-      startServer();
+      server.close(() => {
+        if (++portRetries >= 10) {
+          console.error('[jellyfish] HTTP server failed to bind after 10 retries');
+          return;
+        }
+        settings.serverPort = settings.serverPort + 1;
+        saveSettings();
+        setTimeout(startServer, 500);
+      });
     }
   });
 }
@@ -817,6 +834,11 @@ ipcMain.handle('ai-query', async (_, { prompt, content, filePath }) => {
   try {
     let fileContent = content || null;
     if (!fileContent && filePath && fs.existsSync(filePath)) {
+      // Validate path is within user directories
+      const allowedRoots = [app.getPath('home'), app.getPath('desktop'), app.getPath('documents'), app.getPath('downloads')];
+      const normalized = path.normalize(filePath);
+      const isAllowed = allowedRoots.some(root => normalized.startsWith(root));
+      if (!isAllowed) throw new Error('不允许读取该路径的文件');
       fileContent = fs.readFileSync(filePath, 'utf-8');
     }
     console.log('[jellyfish] AI query:', prompt, 'content size=', fileContent ? fileContent.length : 0);
@@ -934,13 +956,23 @@ ipcMain.handle('chat-submit', async (_, { conversationId, message, fileContext }
       historyMessages.push({ role: m.role, content: m.content });
     });
 
+    // Resolve file content — read from disk if only filePath is given
+    let fileContent = null;
+    if (fileContext) {
+      if (fileContext.content) {
+        fileContent = fileContext.content;
+      } else if (fileContext.filePath && fs.existsSync(fileContext.filePath)) {
+        fileContent = fs.readFileSync(fileContext.filePath, 'utf-8');
+      }
+    }
+
     // Call AI
     let aimsg = message;
-    if (fileContext && fileContext.content) {
+    if (fileContent) {
       aimsg = fileContext.fileName || message;
     }
     const aiResponse = await queryAI(settings, aimsg,
-      fileContext && fileContext.content ? fileContext.content : null,
+      fileContent,
       historyMessages.length > 0 ? historyMessages : null
     );
 
@@ -1025,4 +1057,13 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (server) server.close();
+  // Flush pending writes
+  saveSettings.flush();
+  saveChatHistory.flush && saveChatHistory.flush();
+  // Clean up all timers to prevent zombie processes
+  [edgeHideTimer, edgeWakeTimer, edgeWakeCheck, rehideInterval, _chatSaveTimer].forEach(t => {
+    if (t) { clearTimeout(t); clearInterval(t); }
+  });
+  if (edgeAnimTimer) clearInterval(edgeAnimTimer);
+  if (win && !win.isDestroyed()) win.destroy();
 });

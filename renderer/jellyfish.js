@@ -328,7 +328,7 @@ jelly.addEventListener('mouseenter', () => {
   if (panelLeaveTimer) { clearTimeout(panelLeaveTimer); panelLeaveTimer = null; }
   if (!panel.classList.contains('show')) {
     if (panelHoverTimer) clearTimeout(panelHoverTimer);
-    panelHoverTimer = setTimeout(showPanel, 1000);
+    panelHoverTimer = setTimeout(showPanel, 400);
   }
 });
 

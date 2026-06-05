@@ -261,6 +261,12 @@
   transition: background 0.2s, box-shadow 0.2s;
 }
 body.edge-hidden .edge-strip { display: block; }
+body.edge-hidden .jelly-outer,
+body.edge-hidden .jelly-outer::before,
+body.edge-hidden .jelly-outer::after,
+body.edge-hidden .glow {
+  animation-play-state: paused;
+}
 body.edge-hidden[data-edge="left"] .edge-strip {
   right: 0; top: 0; bottom: 0; width: 3px;
   border-radius: 0 2px 2px 0;

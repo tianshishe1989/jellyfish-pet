@@ -77,12 +77,15 @@ function getAISettings(settings) {
   if (providerId && PROVIDERS[providerId]) {
     const preset = PROVIDERS[providerId];
     const overrides = (settings.aiProviderSettings && settings.aiProviderSettings[providerId]) || {};
+    const isCustom = providerId === 'custom';
     return {
       providerId,
       backend: preset.backend,
       apiKey: overrides.apiKey || settings.aiApiKey || '',
       model: overrides.model || preset.defaultModel || settings.aiModel || '',
-      endpoint: overrides.endpoint || preset.endpoint || settings.aiEndpoint || '',
+      endpoint: isCustom
+        ? (overrides.endpoint || settings.aiEndpoint || '')
+        : (preset.endpoint || ''),  // Lock built-in providers to preset endpoint
       authType: preset.authType,
       systemPrompt: settings.aiSystemPrompt || '你是一个桌面助手，帮用户分析文件内容。回答简洁结构化，用中文回复。'
     };
@@ -157,6 +160,9 @@ async function queryClaudeAPI(ai, prompt, history) {
     }
 
     const data = await response.json();
+    if (!data.content || !Array.isArray(data.content)) {
+      throw new Error(`Claude API returned unexpected response: ${JSON.stringify(data).slice(0, 200)}`);
+    }
     return data.content
       .filter(c => c.type === 'text')
       .map(c => c.text)
@@ -199,7 +205,11 @@ async function queryOpenAI(ai, prompt, history) {
     }
 
     const data = await response.json();
-    return data.choices[0].message.content;
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string') {
+      throw new Error(`OpenAI API returned unexpected response: ${JSON.stringify(data).slice(0, 200)}`);
+    }
+    return text;
   } catch (e) {
     clearTimeout(timeout);
     if (e.name === 'AbortError') throw new Error('API request timed out');

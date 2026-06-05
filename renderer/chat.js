@@ -76,7 +76,9 @@ function renderMessages() {
       + '<div class="meta">' + formatTime(m.timestamp) + (m.context ? ' · ' + escapeHtml(m.context.fileName || '') : '') + '</div>';
     messagesEl.appendChild(div);
   });
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  // Auto-scroll only if user is near bottom
+  const isNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+  if (isNearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 function addMessage(role, content, context) {
@@ -121,6 +123,8 @@ async function newConversation(title) {
 }
 
 async function deleteConversation(id) {
+  const conv = conversations.find(c => c.id === id);
+  if (!confirm(`确定要删除对话"${conv?.title || 'New Chat'}"吗？`)) return;
   try {
     await window.chatAPI.deleteConversation(id);
     conversations = conversations.filter(c => c.id !== id);
@@ -149,16 +153,14 @@ async function sendMessage() {
 
   // Add loading placeholder
   const loadingDiv = document.createElement('div');
-  loadingDiv.className = 'msg assistant';
+  loadingDiv.className = 'msg assistant loading-msg';
   loadingDiv.innerHTML = '<div class="bubble loading-dots">思考中</div>';
-  loadingDiv.id = 'loading-msg';
   messagesEl.appendChild(loadingDiv);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
   try {
     const resp = await window.chatAPI.submitMessage(activeId, text, null);
-    const ld = document.getElementById('loading-msg');
-    if (ld) ld.remove();
+    document.querySelectorAll('.loading-msg').forEach(el => el.remove());
 
     if (resp.ok) {
       const conv = conversations.find(c => c.id === activeId);
@@ -194,16 +196,14 @@ if (window.chatAPI.onFileAnalysis) {
     btnSend.disabled = true;
 
     const loadingDiv = document.createElement('div');
-    loadingDiv.className = 'msg assistant';
+    loadingDiv.className = 'msg assistant loading-msg';
     loadingDiv.innerHTML = '<div class="bubble loading-dots">分析中</div>';
-    loadingDiv.id = 'loading-msg';
     messagesEl.appendChild(loadingDiv);
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
     try {
       const resp = await window.chatAPI.submitMessage(activeId, data.fileName, { type: 'file', fileName: data.fileName, content: data.content });
-      const ld = document.getElementById('loading-msg');
-      if (ld) ld.remove();
+      document.querySelectorAll('.loading-msg').forEach(el => el.remove());
 
       if (resp.ok) {
         const conv = conversations.find(c => c.id === activeId);
@@ -216,8 +216,7 @@ if (window.chatAPI.onFileAnalysis) {
         addMessage('assistant', 'Error: ' + resp.error);
       }
     } catch (e) {
-      const ld = document.getElementById('loading-msg');
-      if (ld) ld.remove();
+      document.querySelectorAll('.loading-msg').forEach(el => el.remove());
       addMessage('assistant', '分析失败: ' + e.message);
     } finally {
       loading = false;
